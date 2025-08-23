@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 # Import Libraries
+from typing import List
 import requests
 import re
 import json
 from todoist_api_python.api import TodoistAPI
+from todoist_api_python.models import Task as tTask
 from requests.auth import HTTPDigestAuth
 from datetime import datetime, timezone, timedelta
 import time
@@ -15,7 +17,7 @@ header = {}
 param = {"per_page": "100", "include": "submission", "enrollment_state": "active"}
 course_ids = []
 assignments = []
-todoist_tasks = []
+todoist_tasks: List[tTask] = []
 courses_id_name_dict = {}
 todoist_project_dict = {}
 throttle_number = 50  # Number of requests to make before sleeping for delay seconds
@@ -142,19 +144,14 @@ def select_courses():
             exit()
         # Note that only courses in "Active" state are returned
         if config["courses"]:
-            use_previous_input = input(
-                "You have previously selected courses. Would you like to use the courses selected last time? (y/n) "
+            course_ids.extend(
+                list(map(lambda course_id: int(course_id), config["courses"]))
             )
-            print("")
-            if use_previous_input == "y" or use_previous_input == "Y":
-                course_ids.extend(
-                    list(map(lambda course_id: int(course_id), config["courses"]))
+            for course in response.json():
+                courses_id_name_dict[course.get("id", None)] = re.sub(
+                    r"[^-a-zA-Z0-9._\s]", "", course.get("name", "")
                 )
-                for course in response.json():
-                    courses_id_name_dict[course.get("id", None)] = re.sub(
-                        r"[^-a-zA-Z0-9._\s]", "", course.get("name", "")
-                    )
-                return
+            return
     except Exception as error:
         print(f"Error while loading courses: {error}")
         print(f"Check API Key and Canvas URL")
@@ -223,16 +220,19 @@ def load_assignments():
 
 # Loads all user tasks from Todoist
 def load_todoist_tasks():
-    tasks = todoist_api.get_tasks()
-    todoist_tasks.extend(tasks)
+    pages = todoist_api.get_tasks()
+    for page in pages:
+        for task in page:
+            todoist_tasks.append(task)
     print(f"Loaded {len(todoist_tasks)} Todoist Tasks")
 
 
 # Loads all user projects from Todoist
 def load_todoist_projects():
-    projects = todoist_api.get_projects()
-    for project in projects:
-        todoist_project_dict[project.name] = project.id
+    pages = todoist_api.get_projects()
+    for page in pages:
+        for project in page:
+            todoist_project_dict[project.name] = project.id
     print(f"Loaded {len(todoist_project_dict)} Todoist Projects")
 
 
@@ -258,7 +258,32 @@ def transfer_assignments_to_todoist():
     global limit_reached
     global throttle_number
     request_count = 0
+    now_utc = datetime.utcnow()
     for assignment in assignments:
+        # Only add assignments with a due date in the future
+        due_at_str = assignment.get("due_at")
+        due_at_dt = None
+        if due_at_str is not None:
+            try:
+                due_at_dt = datetime.strptime(due_at_str, "%Y-%m-%dT%H:%M:%SZ")
+                if due_at_dt <= now_utc:
+                    # Exclude assignments with due dates in the past or now
+                    continue
+            except Exception as e:
+                print(
+                    f"Skipping assignment due to invalid due_at: {assignment.get('name')} ({due_at_str}) - {e}"
+                )
+                continue
+        else:
+            # If assignment has no due date, keep existing exclusion logic
+            if config["sync_no_due_date_assignments"] == False:
+                course_name = courses_id_name_dict[assignment["course_id"]]
+                print(
+                    f"Excluding assignment with no due date: {course_name}: {assignment['name']}"
+                )
+                excluded += 1
+                continue
+
         course_name = courses_id_name_dict[assignment["course_id"]]
         project_id = todoist_project_dict[course_name]
 
@@ -273,13 +298,13 @@ def transfer_assignments_to_todoist():
             ):
                 is_added = True
                 # Ignore updates if assignment has no due date and already synced
-                if assignment["due_at"] is None:
+                if due_at_dt is None:
                     break
                 # Handle case where task does not have due date but assignment does
-                if task.due is None and assignment["due_at"] is not None:
+                if task.due is None and due_at_dt is not None:
                     is_synced = False
                     print(
-                        f"Updating assignment due date: {course_name}:{assignment['name']} to {str(assignment['due_at'])}"
+                        f"Updating assignment due date: {course_name}:{assignment['name']} to {str(due_at_dt)}"
                     )
                     update_task(assignment, task)
                     request_count += 1
@@ -287,10 +312,10 @@ def transfer_assignments_to_todoist():
                 # Check for existence of task.due first to prevent error
                 if task.due is not None:
                     # Handle case where assignment and task both have due dates but they are different
-                    if assignment["due_at"] != task.due.datetime:
+                    if aslocaltimestr(due_at_dt) != aslocaltimestr(task.due.date):
                         is_synced = False
                         print(
-                            f"Updating assignment due date: {course_name}:{assignment['name']} to {str(assignment['due_at'])}"
+                            f"Updating assignment due date: {course_name}:{assignment['name']} to {str(due_at_dt)}"
                         )
                         update_task(assignment, task)
                         request_count += 1
@@ -310,17 +335,6 @@ def transfer_assignments_to_todoist():
                     is_added = True
                     excluded += 1
                     break
-            # Handle case where assignment has no due date and user has specified to not sync assignments with no due date
-            if (
-                assignment["due_at"] is None
-                and config["sync_no_due_date_assignments"] == False
-            ):
-                print(
-                    f"Excluding assignment with no due date: {course_name}: {assignment['name']}"
-                )
-                excluded += 1
-                is_added = True
-                break
             # Handle case where assignment is locked and unlock date is more than 2 days in the future
             if (
                 assignment["unlock_at"] is not None
@@ -391,9 +405,15 @@ def add_new_task(assignment, project_id):
             + ")"
             + " Due",
             project_id=project_id,
-            due_datetime=assignment["due_at"],
+            due_datetime=(
+                aslocaltimestr(
+                    datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
+                )
+                if assignment["due_at"]
+                else None
+            ),
             labels=config["todoist_task_labels"],
-            priority=config["todoist_task_priority"],
+            priority=4,
         )
     except Exception as error:
         print(
@@ -449,7 +469,16 @@ def canvas_assignment_stats():
 def update_task(assignment, task):
     global limit_reached
     try:
-        todoist_api.update_task(task_id=task.id, due_datetime=assignment["due_at"])
+        todoist_api.update_task(
+            task_id=task.id,
+            due_datetime=(
+                aslocaltimestr(
+                    datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
+                )
+                if assignment["due_at"]
+                else None
+            ),
+        )
     except Exception as error:
         print(f"Error while updating task: {error}")
         limit_reached = True
@@ -462,7 +491,7 @@ def utc_to_local(utc_dt):
 
 
 def aslocaltimestr(utc_dt):
-    return utc_to_local(utc_dt).strftime("%Y-%m-%d %I:%M%p")
+    return utc_to_local(utc_dt)
 
 
 # Function for throttling/sleeping
