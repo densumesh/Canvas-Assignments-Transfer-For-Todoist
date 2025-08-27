@@ -397,6 +397,17 @@ def transfer_assignments_to_todoist():
 def add_new_task(assignment, project_id):
     global limit_reached
     try:
+        due_datetime = None
+        due_date = None
+        if assignment["due_at"]:
+            due_dt = datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
+
+            # If due time is 11:59pm, set as all-day (no time)
+            if due_dt.hour == 6 and due_dt.minute == 59:
+                due_date = due_dt.date() - timedelta(days=1)
+            else:
+                due_datetime = aslocaltimestr(due_dt)
+
         todoist_api.add_task(
             content="["
             + assignment["name"]
@@ -405,13 +416,8 @@ def add_new_task(assignment, project_id):
             + ")"
             + " Due",
             project_id=project_id,
-            due_datetime=(
-                aslocaltimestr(
-                    datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
-                )
-                if assignment["due_at"]
-                else None
-            ),
+            due_datetime=due_datetime,
+            due_date=due_date,
             labels=config["todoist_task_labels"],
             priority=4,
         )
@@ -469,15 +475,18 @@ def canvas_assignment_stats():
 def update_task(assignment, task):
     global limit_reached
     try:
+        due_datetime = None
+        due_date = None
+        if assignment["due_at"]:
+            due_dt = datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
+            if due_dt.hour == 6 and due_dt.minute == 59:
+                due_date = due_dt.date() - timedelta(days=1)
+            else:
+                due_datetime = aslocaltimestr(due_dt)
         todoist_api.update_task(
             task_id=task.id,
-            due_datetime=(
-                aslocaltimestr(
-                    datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
-                )
-                if assignment["due_at"]
-                else None
-            ),
+            due_datetime=due_datetime,
+            due_date=due_date,
         )
     except Exception as error:
         print(f"Error while updating task: {error}")
