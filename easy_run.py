@@ -296,12 +296,18 @@ def transfer_assignments_to_todoist():
         for task in todoist_tasks:
             # Check if assignment is already added to Todoist with same name and within the same Project
             task_content = f"[{assignment['name']}]({assignment['html_url']}) Due"
-            is_match = (task.project_id == project_id) and (task.content == task_content)
+            is_match = (task.project_id == project_id) and (
+                task.content == task_content
+            )
 
             if is_match:
                 is_added = True
                 needs_update = False
-                has_description = hasattr(task, 'description') and task.description is not None and task.description != ""
+                has_description = (
+                    hasattr(task, "description")
+                    and task.description is not None
+                    and task.description != ""
+                )
 
                 # Check if task doesn't have a description field (old tasks)
                 # Always update old tasks to add description
@@ -408,7 +414,7 @@ def transfer_assignments_to_todoist():
 def format_task_description(due_dt=None):
     if due_dt is not None:
         # Convert UTC to Mountain Time (automatically handles MST/MDT)
-        mountain_time = ZoneInfo("America/Denver")
+        mountain_time = ZoneInfo("America/Phoenix")
         mt_dt = due_dt.astimezone(mountain_time)
         # Use %Z to show the actual timezone (MST or MDT)
         due_str = mt_dt.strftime("%b %d, %Y at %I:%M %p %Z")
