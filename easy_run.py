@@ -265,7 +265,9 @@ def transfer_assignments_to_todoist():
         due_at_dt = None
         if due_at_str is not None:
             try:
+                # Parse the datetime and make it timezone-aware (Canvas dates are in UTC)
                 due_at_dt = datetime.strptime(due_at_str, "%Y-%m-%dT%H:%M:%SZ")
+                due_at_dt = due_at_dt.replace(tzinfo=timezone.utc)
                 if due_at_dt <= now_utc:
                     # Exclude assignments with due dates in the past or now
                     continue
@@ -422,6 +424,7 @@ def add_new_task(assignment, project_id):
         due_dt = None
         if assignment["due_at"]:
             due_dt = datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
+            due_dt = due_dt.replace(tzinfo=timezone.utc)
 
             # If due time is 11:59pm, set as all-day (no time)
             if due_dt.hour == 6 and due_dt.minute == 59:
@@ -466,6 +469,7 @@ def canvas_assignment_stats():
             timestamp = datetime.strptime(
                 (assignment["submission"]["graded_at"]), "%Y-%m-%dT%H:%M:%SZ"
             )
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
             graded_timestamps.append(timestamp)
         if assignment["graded_submissions_exist"] == True:
             instructor_graded += 1
@@ -500,6 +504,7 @@ def update_task(assignment, task):
         due_dt = None
         if assignment["due_at"]:
             due_dt = datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
+            due_dt = due_dt.replace(tzinfo=timezone.utc)
 
         # Update ONLY the description with the new due date
         # Do NOT update due_datetime or due_date fields to allow user customization
@@ -528,15 +533,18 @@ def aslocaltimestr(utc_dt):
     # Handle both datetime objects and strings
     if isinstance(utc_dt, str):
         # Parse the string first
+        original_str = utc_dt
         try:
-            utc_dt = datetime.strptime(utc_dt, "%Y-%m-%dT%H:%M:%SZ")
+            utc_dt = datetime.strptime(original_str, "%Y-%m-%dT%H:%M:%SZ")
+            utc_dt = utc_dt.replace(tzinfo=timezone.utc)
         except ValueError:
             # Try without time component
             try:
-                utc_dt = datetime.strptime(utc_dt, "%Y-%m-%d")
+                utc_dt = datetime.strptime(original_str, "%Y-%m-%d")
+                utc_dt = utc_dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 # If parsing fails, return the string as-is
-                return utc_dt
+                return original_str
     return utc_to_local(utc_dt)
 
 
