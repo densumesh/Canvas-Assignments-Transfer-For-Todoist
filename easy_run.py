@@ -258,7 +258,7 @@ def transfer_assignments_to_todoist():
     global limit_reached
     global throttle_number
     request_count = 0
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc)
     for assignment in assignments:
         # Only add assignments with a due date in the future
         due_at_str = assignment.get("due_at")
@@ -292,34 +292,43 @@ def transfer_assignments_to_todoist():
 
         for task in todoist_tasks:
             # Check if assignment is already added to Todoist with same name and within the same Project
-            if (
-                task.content == f"[{assignment['name']}]({assignment['html_url']}) Due"
-                and task.project_id == project_id
-            ):
+            task_content = f"[{assignment['name']}]({assignment['html_url']}) Due"
+            is_match = (task.project_id == project_id) and (task.content == task_content)
+
+            if is_match:
                 is_added = True
-                # Ignore updates if assignment has no due date and already synced
-                if due_at_dt is None:
-                    break
-                # Handle case where task does not have due date but assignment does
-                if task.due is None and due_at_dt is not None:
+                needs_update = False
+                has_description = hasattr(task, 'description') and task.description is not None and task.description != ""
+
+                # Check if task doesn't have a description field (old tasks)
+                # Always update old tasks to add description
+                if not has_description:
+                    needs_update = True
                     is_synced = False
                     print(
-                        f"Updating assignment due date: {course_name}:{assignment['name']} to {str(due_at_dt)}"
+                        f"Old task found without description, will update: {course_name}:{assignment['name']}"
+                    )
+                # If task has a description, check if Canvas due date changed and update description
+                elif has_description:
+                    # Check if the Canvas due date changed compared to what's in the description
+                    # Only update description if the due date information changed
+                    new_description = format_task_description(due_at_dt)
+                    if task.description != new_description:
+                        needs_update = True
+                        is_synced = False
+                        print(
+                            f"Canvas due date changed for: {course_name}:{assignment['name']}, updating description"
+                        )
+
+                # Update task if needed (only updates description, not the actual due date)
+                if needs_update:
+                    print(
+                        f"Updating assignment description: {course_name}:{assignment['name']} to '{format_task_description(due_at_dt)}'"
                     )
                     update_task(assignment, task)
                     request_count += 1
-                    break
-                # Check for existence of task.due first to prevent error
-                if task.due is not None:
-                    # Handle case where assignment and task both have due dates but they are different
-                    if aslocaltimestr(due_at_dt) != aslocaltimestr(task.due.date):
-                        is_synced = False
-                        print(
-                            f"Updating assignment due date: {course_name}:{assignment['name']} to {str(due_at_dt)}"
-                        )
-                        update_task(assignment, task)
-                        request_count += 1
-                        break
+
+                break
 
             # Handle case where assignment is not graded
             if config["sync_null_assignments"] == False:
@@ -392,6 +401,17 @@ def transfer_assignments_to_todoist():
     print(f"Excluded: {excluded}")
 
 
+# Helper function to format task description with due date
+def format_task_description(due_dt=None):
+    if due_dt is not None:
+        # Format the due date for display in description
+        local_dt = utc_to_local(due_dt)
+        due_str = local_dt.strftime("%b %d, %Y at %I:%M %p")
+        return f"Due: {due_str}"
+    else:
+        return "Due: No due date"
+
+
 # Adds a new task from a Canvas assignment object to Todoist under the
 # project corresponding to project_id
 def add_new_task(assignment, project_id):
@@ -399,6 +419,7 @@ def add_new_task(assignment, project_id):
     try:
         due_datetime = None
         due_date = None
+        due_dt = None
         if assignment["due_at"]:
             due_dt = datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
 
@@ -408,13 +429,14 @@ def add_new_task(assignment, project_id):
             else:
                 due_datetime = aslocaltimestr(due_dt)
 
+        # Create task content (without due date)
+        content = f"[{assignment['name']}]({assignment['html_url']}) Due"
+        # Create task description (with due date)
+        description = format_task_description(due_dt)
+
         todoist_api.add_task(
-            content="["
-            + assignment["name"]
-            + "]("
-            + assignment["html_url"]
-            + ")"
-            + " Due",
+            content=content,
+            description=description,
             project_id=project_id,
             due_datetime=due_datetime,
             due_date=due_date,
@@ -475,18 +497,17 @@ def canvas_assignment_stats():
 def update_task(assignment, task):
     global limit_reached
     try:
-        due_datetime = None
-        due_date = None
+        due_dt = None
         if assignment["due_at"]:
             due_dt = datetime.strptime(assignment["due_at"], "%Y-%m-%dT%H:%M:%SZ")
-            if due_dt.hour == 6 and due_dt.minute == 59:
-                due_date = due_dt.date() - timedelta(days=1)
-            else:
-                due_datetime = aslocaltimestr(due_dt)
+
+        # Update ONLY the description with the new due date
+        # Do NOT update due_datetime or due_date fields to allow user customization
+        description = format_task_description(due_dt)
+
         todoist_api.update_task(
             task_id=task.id,
-            due_datetime=due_datetime,
-            due_date=due_date,
+            description=description,
         )
     except Exception as error:
         print(f"Error while updating task: {error}")
@@ -496,10 +517,26 @@ def update_task(assignment, task):
 # Credit to https://stackoverflow.com/questions/4563272/how-to-convert-a-utc-datetime-to-a-local-datetime-using-only-standard-library
 # This funciton is simply used for printing out graded and due dates in local time. It is not used for the task creation, as tasks MUST be created in UTC
 def utc_to_local(utc_dt):
+    # If utc_dt is already timezone-aware, convert directly
+    if hasattr(utc_dt, "tzinfo") and utc_dt.tzinfo is not None:
+        return utc_dt.astimezone(tz=None)
+    # If it's a naive datetime, assume it's UTC and add timezone info
     return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=None)
 
 
 def aslocaltimestr(utc_dt):
+    # Handle both datetime objects and strings
+    if isinstance(utc_dt, str):
+        # Parse the string first
+        try:
+            utc_dt = datetime.strptime(utc_dt, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            # Try without time component
+            try:
+                utc_dt = datetime.strptime(utc_dt, "%Y-%m-%d")
+            except ValueError:
+                # If parsing fails, return the string as-is
+                return utc_dt
     return utc_to_local(utc_dt)
 
 
