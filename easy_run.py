@@ -407,10 +407,11 @@ def transfer_assignments_to_todoist():
 # Helper function to format task description with due date
 def format_task_description(due_dt=None):
     if due_dt is not None:
-        # Convert UTC to MST (Mountain Standard Time)
-        mst = ZoneInfo("America/Denver")
-        mst_dt = due_dt.astimezone(mst)
-        due_str = mst_dt.strftime("%b %d, %Y at %I:%M %p MST")
+        # Convert UTC to Mountain Time (automatically handles MST/MDT)
+        mountain_time = ZoneInfo("America/Denver")
+        mt_dt = due_dt.astimezone(mountain_time)
+        # Use %Z to show the actual timezone (MST or MDT)
+        due_str = mt_dt.strftime("%b %d, %Y at %I:%M %p %Z")
         return f"Due: {due_str}"
     else:
         return "Due: No due date"
