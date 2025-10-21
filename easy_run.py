@@ -8,6 +8,7 @@ from todoist_api_python.api import TodoistAPI
 from todoist_api_python.models import Task as tTask
 from requests.auth import HTTPDigestAuth
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import time
 from random import randint
 
@@ -406,9 +407,10 @@ def transfer_assignments_to_todoist():
 # Helper function to format task description with due date
 def format_task_description(due_dt=None):
     if due_dt is not None:
-        # Format the due date for display in description
-        local_dt = utc_to_local(due_dt)
-        due_str = local_dt.strftime("%b %d, %Y at %I:%M %p")
+        # Convert UTC to MST (Mountain Standard Time)
+        mst = ZoneInfo("America/Denver")
+        mst_dt = due_dt.astimezone(mst)
+        due_str = mst_dt.strftime("%b %d, %Y at %I:%M %p MST")
         return f"Due: {due_str}"
     else:
         return "Due: No due date"
